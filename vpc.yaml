@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Creates VPC, Public subnet and an ec2 instance in the public subnet."
+
+Mappings:
+  AmazonLinuxAMI:
+    us-east-1:
+      AMI: ami-0ff8a91507f77f867 # N.virginia    
+    us-east-2:
+      AMI: ami-0b59bfac6be064b78    # Ohio      
+    us-west-1:
+      AMI: ami-0bdb828fd58c52235    # N. California
+    us-west-2:
+      AMI: ami-a0cfeed8             # Oregon
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: ENV
+          Value: production
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      CidrBlock: 10.0.0.0/24
+      VpcId: !Ref VPC
+      Tags: 
+        - Key: ENV
+          Value: production
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+  
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: Public
+  
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway  
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Enable HTTP access via port 80"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 80
+        IpProtocol: tcp
+        ToPort: 80
+      - CidrIp: !Ref SSHLocation
+        FromPort: 22
+        IpProtocol: tcp
+        ToPort: 22
+      SecurityGroupEngress:
+      - IpProtocol: '-1'
+        CidrIp: 0.0.0.0/0
+
+  WebServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [AmazonLinuxAMI, !Ref 'AWS::Region', AMI]
+      InstanceType: t2.micro
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref WebServerSecurityGroup
+      Tags: 
+        - Key: ENV
+          Value: production
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          service httpd start
+          chkconfig httpd on
+          echo "<html><body><h1>Hello, World!</h1></body></html>" > /var/www/html/index.html
+
+Outputs:
+  InstanceEndpoint:
+    Value: !Sub "http://${MyEC2Instance.PublicIp}"
+    Description: Endpoint of the EC2 instance
